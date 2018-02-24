@@ -1,0 +1,77 @@
+version: '3'
+
+services:
+  nginx:
+    restart: always
+    image: nginx:latest
+    container_name: nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "nginxvolume:/etc/nginx/conf.d"
+      - "nginxvolume:/etc/nginx/vhost.d"
+      - "nginxhtml:/usr/share/nginx/html"
+        # Maps local domain folders for certification files read by nginx
+        # Files are written by letsencrypt-engix-proxy-companion container (see :rw)
+      - "proxycerts:/etc/nginx/certs:ro"
+    networks:
+      - nginxproxy
+
+  # Inspects containers' metadata and generates the configuration file for the main nginx reverse proxy
+  # When a new container is spinning up this container detects that, generates /etc/nginx/conf.d/default.conf 
+  # from nginx.tmpl configuration entries and restarts nginx.
+  # (Note: This is configuration automation to the extreme)
+  nginx-gen:
+    depends_on: 
+      - nginx
+    restart: always
+    image: jwilder/docker-gen:latest
+    container_name: nginx-gen
+    volumes:
+      - "/var/run/docker.sock:/tmp/docker.sock:ro"
+      - "nginxvolume:/etc/nginx/conf.d"
+        # Note: If you need the latest nginx.tmpl file you have to download it below
+        # curl -o nginx.tmpl https://raw.githubusercontent.com/jwilder/docker-gen/master/templates/nginx.tmpl
+        # Afterwards you need to copy it over to your remove server. (use:
+        # Docker cp ${PWD}/nginx.tmpl dockermachine#:/home/docker/nginx.tmpl
+      - "/home/docker/nginx.tmpl:/etc/docker-gen/templates/nginx.tmpl:ro"
+        # Maps local domain folders for certification files read by nginx
+        # Files are written by letsencrypt-engix-proxy-companion container (see :rw)
+      - "proxycerts:/etc/nginx/certs:ro"
+    networks:
+      - nginxproxy
+    entrypoint: /usr/local/bin/docker-gen -notify-sighup nginx -watch -wait 5s:30s /etc/docker-gen/templates/nginx.tmpl /etc/nginx/conf.d/default.conf
+
+  # Inspects containers' metadata and tries to acquire certificates as needed 
+  # (if successful then saving them in a volume shared with the host and the Nginx container)
+  # Note: you need to be online for this to work and the organization rate limits requests
+  # See: https://letsencrypt.org/docs/rate-limits/ 
+  letsencrypt-nginx-proxy-companion:
+    restart: always
+    image: jrcs/letsencrypt-nginx-proxy-companion:latest
+    container_name: letsencrypt-nginx-proxy-companion
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "proxycerts:/etc/nginx/certs:rw"
+      - "nginxvolume:/etc/nginx/vhost.d"
+      - "nginxhtml:/usr/share/nginx/html"
+    networks:
+      - nginxproxy
+    environment:
+      - NGINX_DOCKER_GEN_CONTAINER=nginx-gen
+
+# If driver ommited default is local
+volumes:
+  proxycerts:
+    driver: local
+  nginxvolume:
+    driver: local
+  nginxhtml:
+    driver: local
+
+networks:
+  nginxproxy:
+    driver: bridge
+    # TODO: figure out why this doesn't connect in swarm mode if it's already created
+    #driver: overlay

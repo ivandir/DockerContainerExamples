@@ -1,0 +1,64 @@
+version: '3'
+
+services:
+  templates:
+    restart: always
+    build: templates/
+    image: portainer/templates:dev
+    container_name: "portainer-templates"
+    networks:
+      - default
+
+  # TODO run two services
+  # TODO figure out why you have to run the below command to get it working.
+  # Certificates should be able to transfer across the swarm somehow
+  # docker-machine scp -r $DOCKER_CERT_PATH/ linode-instance-name:/certs/
+  portainer:
+    restart: always
+    image: portainer/portainer:latest
+    container_name: "portainer"
+    command: --templates http://templates/templates.json -H $DOCKER_HOST --tlsverify
+    volumes:
+      # TODO if you want to store the portainer data outside
+      # For some reason this argument returns 1 as invalid 
+      # check https://portainer.readthedocs.io/en/latest/deployment.html
+      - portainerdata:/data
+      # For production use this: docker-machine scp -r $DOCKER_CERT_PATH linode-test1:/certs/ 
+      - /certs:/certs
+    environment:
+      # Read by nginx-gen container
+      # Can use multiple subdomains. Example: "host1.domain.com,host2.domain.com", "host1.*"
+      # TODO: Make sure you have a portainer.${DOMAIN}.com environment variable set
+      - VIRTUAL_HOST=portainer.example.com
+      - VIRTUAL_NETWORK=examplenetwork
+      - VIRTUAL_PORT=9000
+      # Read by letsencrypt-nginx-proxy-companion container
+      # Can use multiple subdomains. Example: "host1.domain.com,host2.domain.com"
+      - LETSENCRYPT_HOST=portainer.example.com
+      - LETSENCRYPT_EMAIL=example@example.com
+    networks:
+      - default
+      - nginxoverlay
+
+  watchtower:
+    restart: always
+    image: centurylink/watchtower
+    container_name: "portainer-watchtower"
+    command: --cleanup portainer-app
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - default
+
+# If driver ommited default is local
+volumes:
+  portainerdata:
+    driver: local
+
+networks:
+  # A network overlay is used connect over the current local one. It adds some encapsulation and isolation
+  nginxoverlay:
+    external:
+      name: example_nginx_proxy_network
+  default:
+    driver: bridge
